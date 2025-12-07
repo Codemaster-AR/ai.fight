@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Shooter Arena - Scrolling World</title>
+    <title>AI Shooter Arena - Dual AI Behavior</title>
     <style>
         body {
             display: flex;
@@ -24,6 +24,7 @@
             box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
             background-color: #0f0f1c;
             padding: 10px;
+            position: relative; /* Needed for absolute positioned overlays */
         }
         canvas {
             background-color: #243b55; /* Deep blue background, similar to image */
@@ -59,6 +60,42 @@
         }
         .player-info .health-bar-container .health-bar { background-color: #00ff88; }
         .ai-info .health-bar-container .health-bar { background-color: #ff9900; }
+        
+        /* Menu Overlays */
+        .game-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        .menu-button, #message-box button {
+            background-color: #ff0077;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            margin: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.2rem;
+            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(255, 0, 119, 0.4);
+        }
+        .menu-button:hover, #message-box button:hover {
+            background-color: #cc005f;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 0, 119, 0.6);
+        }
+
+        /* Game Over Box */
         #message-box {
             position: absolute;
             top: 50%;
@@ -73,27 +110,48 @@
             z-index: 100;
             display: none;
         }
-        #message-box button {
-            background-color: #ff0077;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            margin-top: 15px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background-color 0.2s, transform 0.1s;
-        }
-        #message-box button:hover {
-            background-color: #cc005f;
-            transform: translateY(-2px);
-        }
     </style>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body>
 
 <div id="game-container">
+    <!-- Game Over/Win Message Box -->
+    <div id="message-box">
+        <h2 id="message-text" class="text-3xl font-bold mb-4"></h2>
+        <button onclick="changeScreen('MENU')">Back to Menu</button>
+    </div>
+    
+    <!-- Home Menu Overlay -->
+    <div id="menu-screen" class="game-overlay">
+        <h1 class="text-5xl font-extrabold mb-10 text-cyan-400">AI Shooter Arena</h1>
+        <button class="menu-button bg-cyan-500 hover:bg-cyan-700" onclick="changeScreen('LEVEL_SELECT')">
+            START GAME
+        </button>
+        <p class="mt-5 text-gray-400 text-sm">Use WASD or Arrows to Move/Jump, Shift to Shoot</p>
+    </div>
+
+    <!-- Level Select Overlay -->
+    <div id="level-select-screen" class="game-overlay hidden">
+        <h2 class="text-4xl font-bold mb-8 text-cyan-300">Choose Your Level</h2>
+        
+        <div class="flex flex-col space-y-4">
+            <!-- Level 1: The Arena -->
+            <button class="menu-button" onclick="startGame(LEVEL_CONFIGS.ARENA)">
+                The Arena (Standard Deathmatch)
+            </button>
+            
+            <!-- Level 2: The Void -->
+            <button class="menu-button bg-purple-600 hover:bg-purple-800" onclick="startGame(LEVEL_CONFIGS.VOID)">
+                The Void (Knockout Only!)
+            </button>
+        </div>
+        <button class="menu-button bg-gray-500 hover:bg-gray-700 mt-8 text-sm py-3" onclick="changeScreen('MENU')">
+            Back
+        </button>
+    </div>
+
+    <!-- Game HUD and Canvas -->
     <div id="hud">
         <div class="player-info">
             <span>PLAYER</span>
@@ -111,57 +169,83 @@
     <canvas id="gameCanvas" width="800" height="500"></canvas>
 </div>
 
-<div id="message-box">
-    <h2 id="message-text" class="text-3xl font-bold mb-4"></h2>
-    <button onclick="window.location.reload()">Restart Game</button>
-</div>
 
 <script>
+    // --- Global Level Configuration ---
+    const LEVEL_CONFIGS = {
+        ARENA: { 
+            id: 'ARENA', 
+            name: 'The Arena', 
+            worldWidth: 2400, 
+            floorY: 500 - 30, 
+            knockoutY: null,
+            background: '#243b55' 
+        },
+        VOID: { 
+            id: 'VOID', 
+            name: 'The Void', 
+            worldWidth: 1600, 
+            floorY: 500 + 200, // Floor is far below to simulate a pit
+            knockoutY: 500 + 50, // Point of no return
+            background: '#09091a' 
+        } 
+    };
+    
+    // --- AI Behavior States for Refactoring ---
+    const AI_BEHAVIORS = {
+        ARENA: 'ARENA',
+        VOID: 'VOID'
+    };
+
     document.addEventListener('DOMContentLoaded', () => {
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const GAME_WIDTH = canvas.width;
         const GAME_HEIGHT = canvas.height;
-
+        
+        // --- Game States and Level Configuration ---
+        const GAME_STATES = {
+            MENU: 'MENU',
+            LEVEL_SELECT: 'LEVEL_SELECT',
+            GAME: 'GAME'
+        };
+        let currentGameState = GAME_STATES.MENU;
+        let currentLevelConfig = LEVEL_CONFIGS.ARENA;
+        
         // --- World and Camera Constants ---
-        const WORLD_WIDTH = 2400; // The total size of the game world (3x the canvas width)
-        const FLOOR_Y = GAME_HEIGHT - 30; // Floor position (relative to screen height)
-
-        // Game Constants
         const GRAVITY = 0.5;
-        const BASE_SPEED = 3.5; // Shared speed for player and enemy
+        const BASE_SPEED = 3.5;
         const PLAYER_SPEED = BASE_SPEED;
         const ENEMY_SPEED = BASE_SPEED;
         const ENEMY_FLEE_SPEED = 6;
         const JUMP_VELOCITY = -10;
         const BULLET_SPEED = 8;
         const MAX_HEALTH = 100;
-        const FLEE_THRESHOLD = 30; // AI flees when health drops below this
-        const DODGE_DISTANCE = 80; // Distance to detect an incoming bullet
-        const CAMERA_LAG = 0.05; // How smoothly the camera follows the player
+        const FLEE_THRESHOLD = 30; 
+        const DODGE_DISTANCE = 80;
+        const CAMERA_LAG = 0.05;
         
-        // --- KNOCKBACK CONSTANTS ---
-        const KNOCKBACK_FORCE = 5; // Force for player/enemy pushback (Melee)
-        const BULLET_ENTITY_KNOCKBACK_FORCE = 2.5; // NEW: Force for bullet hitting player/enemy
-        const BULLET_KNOCKBACK_FORCE = 1.2; // Force bullets push each other back (Clash)
+        const KNOCKBACK_FORCE = 5; 
+        const BULLET_ENTITY_KNOCKBACK_FORCE = 2.5;
+        const BULLET_KNOCKBACK_FORCE = 1.2;
         
-        const BLOCKAGE_DISTANCE = 40; // Distance for AI to detect player blocking path
-        const OVERJUMP_VELOCITY = -14; // Higher jump for clearing the player
+        const BLOCKAGE_DISTANCE = 40;
+        const OVERJUMP_VELOCITY = -14; 
 
         // AI specific constants
-        const AI_FOLLOW_CHANCE = 0.7; // 70% chance to pursue when out of range (more aggressive)
-        const MIN_FLEE_DISTANCE = 450; // AI will run away until it achieves this distance when low on health.
+        const AI_FOLLOW_CHANCE = 0.7; 
+        const MIN_FLEE_DISTANCE = 450; 
 
-        // AI State Machine
+        // AI State Machine (Only used in ARENA mode now)
         const AI_STATES = {
             ATTACK: 'ATTACK',
             DODGE: 'DODGE',
             FLEE: 'FLEE'
         };
         
-        // AI Random Movement Constants (to simulate human unpredictability)
-        const AI_MOVE_DURATION_MIN = 40; // 0.66 seconds
-        const AI_MOVE_DURATION_MAX = 150; // 2.5 seconds (Increased for smoother, less twitchy movement)
+        // AI Random Movement Constants
+        const AI_MOVE_DURATION_MIN = 40;
+        const AI_MOVE_DURATION_MAX = 150;
 
         // Global Game State
         let player;
@@ -170,16 +254,30 @@
         let enemyBullets = [];
         let keys = {};
         let lastBulletTime = 0;
-        const SHOOT_COOLDOWN = 300; // milliseconds (Player's cooldown)
+        const SHOOT_COOLDOWN = 300; 
         let aiLastShotTime = 0;
-        const AI_SHOOT_COOLDOWN = 1500; // milliseconds (AI's cooldown)
+        const AI_SHOOT_COOLDOWN_ARENA = 1500;
+        const AI_SHOOT_COOLDOWN_VOID = 500; // More aggressive shooting in void
         let gameRunning = true;
         
-        let cameraX = 0; // The top-left corner of the camera view in world coordinates
+        let cameraX = 0; 
         let platforms = [];
-        let grassOffset = 0; // For grass animation
+        let grassOffset = 0;
 
-        // --- Utility Functions ---
+        // --- Screen Management ---
+        function changeScreen(newState) {
+            currentGameState = newState;
+            document.getElementById('menu-screen').classList.add('hidden');
+            document.getElementById('level-select-screen').classList.add('hidden');
+            document.getElementById('message-box').style.display = 'none';
+
+            if (newState === GAME_STATES.MENU) {
+                document.getElementById('menu-screen').classList.remove('hidden');
+            } else if (newState === GAME_STATES.LEVEL_SELECT) {
+                document.getElementById('level-select-screen').classList.remove('hidden');
+            }
+        }
+        window.changeScreen = changeScreen;
 
         /** Calculates distance between two points (a and b) */
         function dist(x1, y1, x2, y2) {
@@ -195,39 +293,65 @@
         }
 
         /** Shows game over or victory message */
-        function showMessage(message) {
+        function showMessage(message, isVictory) {
             gameRunning = false;
             document.getElementById('message-text').textContent = message;
             document.getElementById('message-box').style.display = 'block';
+            
+            const messageBox = document.getElementById('message-box');
+            if (isVictory) {
+                messageBox.style.borderColor = '#00ff88';
+                messageBox.style.boxShadow = '0 0 40px rgba(0, 255, 136, 0.7)';
+            } else {
+                messageBox.style.borderColor = '#ff0077';
+                messageBox.style.boxShadow = '0 0 40px rgba(255, 0, 119, 0.7)';
+            }
         }
 
         // --- Platform Generation (The "Trees" and "Cliffs" from the image) ---
-        function generatePlatforms() {
+        function generatePlatforms(worldWidth, floorY) {
             platforms = [];
-            // Add static pillars/trees and ledges across the world
+            
+            // VOID Mode Platform Generation (Single Central Platform)
+            if (currentLevelConfig.id === LEVEL_CONFIGS.VOID.id) {
+                const platformHeight = 20;
+                const platformY = GAME_HEIGHT - 100; 
+                const platformWidth = worldWidth / 2;
+                platforms.push({
+                    x: (worldWidth / 2) - (platformWidth / 2), 
+                    y: platformY,
+                    width: platformWidth,
+                    height: platformHeight,
+                    color: '#6a0dad', 
+                    isLedge: true
+                });
+                return;
+            }
+
+            // ARENA Mode Platform Generation (Original Logic)
             let x = 100;
             const maxLedgeHeight = 150;
             const minLedgeHeight = 50;
 
-            while (x < WORLD_WIDTH - 100) {
+            while (x < worldWidth - 100) {
                 // Large pillar/tree (background visual)
                 platforms.push({
                     x: x + Math.random() * 50,
-                    y: FLOOR_Y - (Math.random() * 200 + 100),
+                    y: floorY - (Math.random() * 200 + 100),
                     width: Math.random() * 10 + 10,
                     height: 300,
-                    color: `rgb(30, ${Math.floor(80 + Math.random() * 40)}, 60)`, // Dark green
-                    isLedge: false
+                    color: `rgb(30, ${Math.floor(80 + Math.random() * 40)}, 60)`, 
+                    isLledge: false
                 });
 
                 // Playable ledge/platform
                 if (Math.random() < 0.5) {
                     platforms.push({
                         x: x + 50 + Math.random() * 100,
-                        y: FLOOR_Y - (Math.random() * (maxLedgeHeight - minLedgeHeight) + minLedgeHeight),
+                        y: floorY - (Math.random() * (maxLedgeHeight - minLedgeHeight) + minLedgeHeight),
                         width: Math.random() * 60 + 30,
                         height: 10,
-                        color: '#4e5a65', // Gray/blue ledge
+                        color: '#4e5a65', 
                         isLedge: true
                     });
                 }
@@ -239,28 +363,28 @@
 
         class Entity {
             constructor(x, y, width, height, color, health) {
-                this.x = x; // World X coordinate
-                this.y = y; // World Y coordinate
+                this.x = x; 
+                this.y = y; 
                 this.width = width;
                 this.height = height;
                 this.color = color;
                 this.health = health;
                 this.velY = 0;
-                this.velX = 0; // Horizontal velocity for knockback/pushback
+                this.velX = 0; 
                 this.isGrounded = false;
-                this.animationTimer = 0; // For running bob animation
-                this.muzzleFlashTimer = 0; // Timer for muzzle flash effect
+                this.animationTimer = 0;
+                this.muzzleFlashTimer = 0;
             }
 
-            // Checks for collisions with platforms and the main floor
             handlePlatformCollision() {
                 let onPlatform = false;
+                const floorY = currentLevelConfig.floorY; 
 
                 for (const p of platforms) {
                     if (p.isLedge && checkCollision(this, p)) {
                         // Collision from above (landing on platform)
                         if (this.velY >= 0 && this.y + this.height - this.velY <= p.y) {
-                            this.y = p.y - this.height; // Snap to top
+                            this.y = p.y - this.height; 
                             this.velY = 0;
                             this.isGrounded = true;
                             onPlatform = true;
@@ -271,10 +395,10 @@
                             const overlapX = Math.min(this.x + this.width, p.x + p.width) - Math.max(this.x, p.x);
                             if (this.x < p.x) {
                                 this.x -= overlapX;
-                                this.velX = Math.max(0, this.velX); // Stop movement into platform
+                                this.velX = Math.max(0, this.velX); 
                             } else {
                                 this.x += overlapX;
-                                this.velX = Math.min(0, this.velX); // Stop movement into platform
+                                this.velX = Math.min(0, this.velX);
                             }
                         }
                     }
@@ -282,8 +406,8 @@
                 
                 // If not on a platform, check main floor
                 if (!onPlatform) {
-                    if (this.y + this.height >= FLOOR_Y) {
-                        this.y = FLOOR_Y - this.height;
+                    if (this.y + this.height >= floorY) {
+                        this.y = floorY - this.height;
                         this.velY = 0;
                         this.isGrounded = true;
                     } else {
@@ -295,14 +419,11 @@
             }
 
             applyGravity() {
-                // Apply horizontal knockback/movement
                 this.x += this.velX;
                 
-                // Decay horizontal velocity for a "bouncing" effect
                 this.velX *= 0.9;
-                if (Math.abs(this.velX) < 0.01) this.velX = 0; // Even smaller threshold for final stop
+                if (Math.abs(this.velX) < 0.01) this.velX = 0; 
 
-                // Apply vertical movement and gravity
                 if (!this.isGrounded) {
                     this.velY += GRAVITY;
                 }
@@ -312,7 +433,6 @@
 
             draw() {
                 const screenX = this.x - cameraX;
-                // Only draw if on screen
                 if (screenX + this.width > 0 && screenX < GAME_WIDTH) {
                     ctx.fillStyle = this.color;
                     ctx.fillRect(screenX, this.y, this.width, this.height);
@@ -327,19 +447,19 @@
         }
 
         class Player extends Entity {
-            constructor() {
-                super(50, FLOOR_Y - 40, 20, 40, '#00ffff', MAX_HEALTH);
+            constructor(startX, startY) {
+                super(startX, startY, 20, 40, '#00ffff', MAX_HEALTH);
                 this.isShooting = false;
                 this.facingRight = true;
-                // isKnocked is now purely for visual effects, not blocking input
                 this.isKnocked = false; 
             }
 
             update() {
                 const oldX = this.x; 
                 let moveX = 0;
+                const worldWidth = currentLevelConfig.worldWidth;
                 
-                // --- 1. Read User Input (Always allowed) ---
+                // 1. Read User Input
                 if (keys['ArrowLeft'] || keys['a']) {
                     moveX = -PLAYER_SPEED;
                     this.facingRight = false;
@@ -348,9 +468,7 @@
                     this.facingRight = true;
                 }
                 
-                // --- 2. Input Override Fix (Regain Control) ---
-                // If the player is applying intentional movement, and the knockback is weak, clear velX instantly.
-                // This prevents the "stuck/sliding" feeling.
+                // 2. Input Override Fix
                 if (moveX !== 0 && Math.abs(this.velX) < 1.0) { 
                     this.velX = 0;
                 }
@@ -367,7 +485,7 @@
                 // 5. Apply Gravity and Knockback Decay (via applyGravity)
                 this.applyGravity();
                 
-                // 6. Update Visual Knockback Flag (Only visual effect threshold)
+                // 6. Update Visual Knockback Flag
                 this.isKnocked = Math.abs(this.velX) > 1.5;
 
                 // Muzzle flash timer update
@@ -377,7 +495,6 @@
                 if (this.isGrounded && Math.abs(this.x - oldX) > 0.1 && !this.isKnocked) {
                     this.animationTimer++;
                 } else if (this.isGrounded) {
-                    // Decelerate timer when standing still
                     if (this.animationTimer > 0) this.animationTimer -= 2;
                     if (this.animationTimer < 0) this.animationTimer = 0;
                 }
@@ -385,11 +502,11 @@
                 // World boundary constraints
                 if (this.x < 0) { 
                     this.x = 0; 
-                    this.velX = Math.max(0, this.velX); // Stop inbound movement
+                    this.velX = Math.max(0, this.velX);
                 }
-                if (this.x + this.width > WORLD_WIDTH) {
-                    this.x = WORLD_WIDTH - this.width;
-                    this.velX = Math.min(0, this.velX); // Stop inbound movement
+                if (this.x + this.width > worldWidth) {
+                    this.x = worldWidth - this.width;
+                    this.velX = Math.min(0, this.velX);
                 }
             }
 
@@ -397,51 +514,45 @@
                 const now = Date.now();
                 if (now - lastBulletTime > SHOOT_COOLDOWN) {
                     const direction = this.facingRight ? 1 : -1;
-                    // Start bullet from the edge of the player
                     const bulletX = this.x + (this.width / 2) + (direction * (this.width / 2)); 
                     const bulletY = this.y + (this.height / 2);
-                    // Player bullets have a simple direction-based velocity
                     playerBullets.push(new Bullet(bulletX, bulletY, direction * BULLET_SPEED, 0, '#ffffff', false));
                     lastBulletTime = now;
-                    this.muzzleFlashTimer = 5; // Trigger muzzle flash
+                    this.muzzleFlashTimer = 5; 
                 }
             }
 
             updateHUD() {
-                // If player is low health, change bar color to red
                 const healthBar = document.getElementById('player-health');
-                healthBar.style.width = `${this.health}%`;
-                if (this.health < FLEE_THRESHOLD) {
-                    healthBar.style.backgroundColor = '#ff0000'; // Red
+                if (currentLevelConfig.id === LEVEL_CONFIGS.ARENA.id) {
+                    healthBar.style.width = `${this.health}%`;
+                    if (this.health < FLEE_THRESHOLD) {
+                        healthBar.style.backgroundColor = '#ff0000';
+                    } else {
+                        healthBar.style.backgroundColor = '#00ff88';
+                    }
                 } else {
-                    healthBar.style.backgroundColor = '#00ff88'; // Default Green
+                     // Hide health bar in VOID mode as health is irrelevant
+                     healthBar.style.width = '100%';
+                     healthBar.style.backgroundColor = 'transparent';
                 }
             }
 
             draw() {
                 const screenX = this.x - cameraX;
-                
-                // Running Bob Calculation
                 let yOffset = 0;
-                // Add a small bounce on knockback
                 if (this.isKnocked) {
                     yOffset = Math.sin(Date.now() / 50) * 3;
                 } else if (this.isGrounded && this.animationTimer > 0) {
-                    // Subtle up/down movement based on sine wave
                     yOffset = Math.sin(this.animationTimer * 0.3) * 1.5; 
                 }
 
-                // Only draw if on screen
                 if (screenX + this.width > 0 && screenX < GAME_WIDTH) {
-                    // Draw Body
-                    // Flash red temporarily during knockback for visual effect
                     ctx.fillStyle = this.isKnocked && (Math.floor(Date.now() / 100) % 2 === 0) ? '#ff0000' : this.color;
                     ctx.fillRect(screenX, this.y + yOffset, this.width, this.height);
                     
-                    // Draw a single Eye
-                    const eyeColor = '#1a1a2e'; // Dark color for contrast
+                    const eyeColor = '#1a1a2e';
                     const eyeSize = 4;
-                    // Position eye near the top quarter of the body, applied with yOffset
                     const eyeY = this.y + (this.height / 4) - (eyeSize / 2) + yOffset; 
 
                     if (this.facingRight) {
@@ -454,20 +565,17 @@
                         ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
                     }
 
-                    // --- Muzzle Flash Effect ---
                     if (this.muzzleFlashTimer > 0) {
                         const flashSize = 8;
                         const flashColor = 'rgba(255, 255, 100, 0.8)';
                         let flashX;
                         
-                        // Flash position at the edge of the player's body
                         if (this.facingRight) {
                             flashX = screenX + this.width;
                         } else {
                             flashX = screenX - flashSize;
                         }
                         
-                        // Draw a small flare at the bullet origin point
                         ctx.fillStyle = flashColor;
                         ctx.fillRect(flashX, this.y + this.height / 2 - flashSize / 2 + yOffset, flashSize, flashSize);
                     }
@@ -476,54 +584,67 @@
         }
 
         class Enemy extends Entity {
-            constructor() {
-                super(WORLD_WIDTH - 70, FLOOR_Y - 40, 20, 40, '#ff9900', MAX_HEALTH);
-                this.state = AI_STATES.ATTACK;
-                this.dodgeMove = 0; 
+            constructor(startX, startY, behavior) {
+                super(startX, startY, 20, 40, '#ff9900', MAX_HEALTH);
+                this.behavior = behavior || AI_BEHAVIORS.ARENA;
+                this.state = AI_STATES.ATTACK; // Only used in ARENA
                 this.lastJumpTime = Date.now();
                 this.facingRight = false; 
                 
-                // AI randomness properties
                 this.aiMoveTimer = 0;
-                this.aiMoveDirection = 0; // -1: Left, 0: Still, 1: Right
+                this.aiMoveDirection = 0;
                 
-                // Fixed Glance/Look Back Logic
-                this.lookBackDuration = 0; // Frames remaining for glance
+                this.lookBackDuration = 0; // Only used in ARENA
                 this.isKnocked = false;
             }
 
             update() {
-                const oldX = this.x; // Capture old position for animation check
+                const oldX = this.x; 
+                const worldWidth = currentLevelConfig.worldWidth;
+                
+                // 1. Check if AI should shoot (Covers both behaviors)
+                const shootCooldown = this.behavior === AI_BEHAVIORS.VOID ? AI_SHOOT_COOLDOWN_VOID : AI_SHOOT_COOLDOWN_ARENA;
+                const targetIsRight = player.x > this.x;
 
-                // Only update AI movement if not currently knocked back (AI uses a strict cutoff)
+                if (Date.now() - aiLastShotTime > shootCooldown) {
+                    // Only allow shooting if currently facing the target
+                    if (this.facingRight === targetIsRight) { 
+                        this.aiShoot(player);
+                        aiLastShotTime = Date.now();
+                    }
+                }
+                
+                // 2. Update AI Logic (Behavior Separation)
                 if (Math.abs(this.velX) < 0.1) {
-                    this.updateAI();
                     this.isKnocked = false;
+                    
+                    if (this.behavior === AI_BEHAVIORS.VOID) {
+                        this.updateAIVoid();
+                    } else {
+                        this.updateAIArena();
+                    }
                 } else {
                     this.isKnocked = true;
                 }
                 
+                // 3. Apply Movement
                 let speed = ENEMY_SPEED;
-                // Use the faster flee speed when running away
-                if (this.state === AI_STATES.FLEE) {
+                if (this.behavior === AI_BEHAVIORS.ARENA && this.state === AI_STATES.FLEE) {
                     speed = ENEMY_FLEE_SPEED;
                 }
                 
-                // Apply AI movement based on the determined direction
                 if (!this.isKnocked) {
                     this.x += this.aiMoveDirection * speed; 
                 }
 
+                // 4. Apply Physics
                 this.applyGravity();
 
-                // Muzzle flash timer update
                 this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - 1);
 
-                // Animation Timer update (Running Bob)
                 if (this.isGrounded && Math.abs(this.x - oldX) > 0.1 && !this.isKnocked) {
                     this.animationTimer++;
                 } else if (this.isGrounded) {
-                    // Decelerate timer when standing still
                     if (this.animationTimer > 0) this.animationTimer -= 2;
                     if (this.animationTimer < 0) this.animationTimer = 0;
                 }
@@ -531,35 +652,120 @@
                 // World boundary constraints
                 if (this.x < 0) { 
                     this.x = 0; 
-                    this.velX = Math.max(0, this.velX); // Stop inbound movement
+                    this.velX = Math.max(0, this.velX);
                 }
-                if (this.x + this.width > WORLD_WIDTH) {
-                    this.x = WORLD_WIDTH - this.width;
-                    this.velX = Math.min(0, this.velX); // Stop inbound movement
+                if (this.x + this.width > worldWidth) {
+                    this.x = worldWidth - this.width;
+                    this.velX = Math.min(0, this.velX);
                 }
             }
-
-            // AI Logic: Attack, Dodge, Flee, and Strategic Jumping
-            updateAI() {
+            
+            // --- CORE AI LOGIC: VOID KNOCKOUT BEHAVIOR ---
+            updateAIVoid() {
                 const now = Date.now();
-                
-                // Determine the default facing direction (towards the player)
                 const defaultFacing = this.x < player.x;
+                this.facingRight = defaultFacing;
                 
-                // --- STRATEGIC JUMP CHECK (Priority 0) ---
-                const distanceToPlayer = Math.abs(this.x - player.x);
-                const playerBlockage = distanceToPlayer < BLOCKAGE_DISTANCE && Math.abs(this.y - player.y) < 5; // Player is close and on the same ground level
+                // 1. VOID PLATFORM BOUNDARIES (World width 1600, Platform width 800, centered)
+                // This is the safe area the AI must not exit.
+                const VOID_PLATFORM_X_MIN = 400; // 1600 / 4
+                const VOID_PLATFORM_X_MAX = 1200; // 1600 * 3 / 4
 
-                // If AI is trying to move into the player (same direction)
+                // Calculate distance and proximity
+                const distanceToPlayer = Math.abs(this.x - player.x);
+                const playerBlockage = distanceToPlayer < BLOCKAGE_DISTANCE && Math.abs(this.y - player.y) < 5; 
+                
+                // --- Priority 0: Player Bump/Blockage Avoidance JUMP ---
                 const tryingToBump = (this.aiMoveDirection === 1 && this.x < player.x) || 
                                      (this.aiMoveDirection === -1 && this.x > player.x);
 
                 if (playerBlockage && tryingToBump && this.isGrounded && now - this.lastJumpTime > 500) {
-                    // Execute a high jump to clear the player
                     this.velY = OVERJUMP_VELOCITY;
                     this.isGrounded = false;
                     this.lastJumpTime = now;
-                    // Do not execute further AI movement logic this frame
+                    this.aiMoveDirection = 0; // Stop horizontal movement during escape jump
+                    return; 
+                }
+                
+                // --- Priority 1: Bullet Dodge Jump ---
+                const incomingBullet = playerBullets.find(bullet => {
+                    const distance = dist(bullet.x, bullet.y, this.x, this.y);
+                    const predictedY = bullet.y; 
+
+                    return distance < DODGE_DISTANCE && 
+                           (predictedY > this.y - 10 && predictedY < this.y + this.height + 10) &&
+                           ((bullet.velX > 0 && this.x > bullet.x) || (bullet.velX < 0 && this.x < bullet.x));
+                });
+                
+                if (incomingBullet) {
+                    this.aiMoveDirection = incomingBullet.velX < 0 ? 1 : -1;
+                    
+                    if (this.isGrounded && now - this.lastJumpTime > 500) {
+                        this.velY = JUMP_VELOCITY * 0.8;
+                        this.lastJumpTime = now;
+                    }
+                } else {
+                    // --- Priority 2: Movement Logic (Stay on platform and position aggressively) ---
+                    
+                    const edgePadding = 70; // Stop movement before getting too close to the edge
+                    const xEdgeLeft = VOID_PLATFORM_X_MIN + edgePadding;
+                    const xEdgeRight = VOID_PLATFORM_X_MAX - edgePadding - this.width;
+
+                    let targetX = player.x;
+                    let desiredMove = (targetX > this.x) ? 1 : -1;
+                    
+                    // Boundary Check: Prevent the AI from moving off the platform voluntarily
+                    if (this.x < xEdgeLeft && desiredMove < 0) {
+                         desiredMove = 0; // Stop moving left
+                    }
+                    if (this.x > xEdgeRight && desiredMove > 0) {
+                         desiredMove = 0; // Stop moving right
+                    }
+
+                    // If player is far away, just move towards them until we hit the padding.
+                    if (distanceToPlayer > 50) {
+                        this.aiMoveDirection = desiredMove;
+                    } else {
+                        // If player is very close, occasionally stop or move slightly away to maintain distance
+                        this.aiMoveTimer--;
+                        if (this.aiMoveTimer <= 0) {
+                             this.aiMoveTimer = Math.floor(Math.random() * 80) + 40;
+                             if (Math.random() < 0.3) {
+                                 this.aiMoveDirection = 0; // Stop
+                             } else if (Math.random() < 0.6) {
+                                 this.aiMoveDirection = desiredMove; // Approach
+                             } else {
+                                 this.aiMoveDirection = -desiredMove; // Back off
+                             }
+                        }
+                    }
+                    
+                    // Make small defensive jumps when standing still too long
+                    if (this.isGrounded && this.aiMoveDirection === 0 && Math.random() < 0.003 && now - this.lastJumpTime > 1500) {
+                        this.velY = JUMP_VELOCITY * 0.7;
+                        this.lastJumpTime = now;
+                    }
+                }
+                
+                // Shooting handled in Enemy.update()
+            }
+
+
+            // --- CORE AI LOGIC: ARENA DEATHMATCH BEHAVIOR ---
+            updateAIArena() {
+                const now = Date.now();
+                const defaultFacing = this.x < player.x;
+                
+                // --- STRATEGIC JUMP CHECK (Priority 0: Player Bump Avoidance) ---
+                const distanceToPlayer = Math.abs(this.x - player.x);
+                const playerBlockage = distanceToPlayer < BLOCKAGE_DISTANCE && Math.abs(this.y - player.y) < 5; 
+                const tryingToBump = (this.aiMoveDirection === 1 && this.x < player.x) || 
+                                     (this.aiMoveDirection === -1 && this.x > player.x);
+
+                if (playerBlockage && tryingToBump && this.isGrounded && now - this.lastJumpTime > 500) {
+                    this.velY = OVERJUMP_VELOCITY;
+                    this.isGrounded = false;
+                    this.lastJumpTime = now;
                     return; 
                 }
                 // ------------------------------------------
@@ -567,32 +773,22 @@
                 // 1. STATE CHECK (Priority 1: Flee/Desperation)
                 const isEnemyLow = this.health < FLEE_THRESHOLD;
                 const isPlayerLow = player.health < FLEE_THRESHOLD;
-
+                
                 if (isEnemyLow) {
-                    if (isPlayerLow) {
-                        // Desperation Mode: Both low, AI fights to the death.
-                        this.state = AI_STATES.ATTACK; 
-                    } else {
-                        // Only AI is low, flee.
-                        this.state = AI_STATES.FLEE;
-                    }
+                    this.state = isPlayerLow ? AI_STATES.ATTACK : AI_STATES.FLEE;
                 } else if (this.health >= FLEE_THRESHOLD && this.state === AI_STATES.FLEE) {
-                    // Enemy recovered or was mistakenly fleeing. Return to attack.
                     this.state = AI_STATES.ATTACK;
                 }
 
 
-                // 2. STATE CHECK (Priority 2: Dodge - Overrides horizontal movement)
+                // 2. STATE CHECK (Priority 2: Dodge)
                 const incomingBullet = playerBullets.find(bullet => {
                     const distance = dist(bullet.x, bullet.y, this.x, this.y);
-                    // Simple prediction based on horizontal path
-                    // Note: Player bullets travel purely horizontal (velY=0), so prediction is simpler
                     const predictedY = bullet.y; 
 
-                    // Check if bullet is approaching and likely to hit the vertical space
                     return distance < DODGE_DISTANCE && 
                            (predictedY > this.y - 10 && predictedY < this.y + this.height + 10) &&
-                           ((bullet.velX > 0 && this.x > bullet.x) || (bullet.velX < 0 && this.x < bullet.x)); // Moving towards AI
+                           ((bullet.velX > 0 && this.x > bullet.x) || (bullet.velX < 0 && this.x < bullet.x));
                 });
 
                 if (incomingBullet) {
@@ -602,21 +798,17 @@
                             this.velY = JUMP_VELOCITY * 0.8;
                             this.lastJumpTime = now;
                         }
-                    } else if (this.state !== AI_STATES.DODGE) { // Standard Dodge Logic for ATTACK state
+                    } else if (this.state !== AI_STATES.DODGE) { 
                         this.state = AI_STATES.DODGE;
-                        // Determine which way to dodge (away from bullet source)
                         this.aiMoveDirection = incomingBullet.velX < 0 ? 1 : -1;
                         
-                        // Execute an immediate, random jump while dodging (unpredictable)
                         if (this.isGrounded && now - this.lastJumpTime > 500) {
                             this.velY = JUMP_VELOCITY * 0.8;
                             this.lastJumpTime = now;
                         }
-                        // Timeout for dodge state
                         setTimeout(() => this.state = AI_STATES.ATTACK, 400);
                     }
                 } else if (this.state === AI_STATES.DODGE) {
-                    // Keep moving in the dodge direction until timeout
                     return; 
                 }
 
@@ -624,67 +816,47 @@
                 // 3. EXECUTE STATE BEHAVIOR
                 switch (this.state) {
                     case AI_STATES.ATTACK:
-                        
-                        // --- Random Movement Logic (Simulating Human Input - More Natural) ---
+                        // --- Random Movement Logic ---
                         this.aiMoveTimer--;
 
                         if (this.aiMoveTimer <= 0) {
-                            // Time to choose a new move (0.66 to 2.5 seconds)
                             this.aiMoveTimer = Math.floor(Math.random() * (AI_MOVE_DURATION_MAX - AI_MOVE_DURATION_MIN + 1)) + AI_MOVE_DURATION_MIN;
 
-                            // Calculate directions based on player
                             const directionToPlayer = defaultFacing ? 1 : -1;
                             const directionAwayFromPlayer = -directionToPlayer;
 
                             const moveChoice = Math.random();
                             
-                            // NEW probabilities (More aggressive, less stationary):
                             if (moveChoice < 0.40) {
-                                // 40% chance: Move towards player (aggressive closure or shuffling)
                                 this.aiMoveDirection = directionToPlayer; 
                             } else if (moveChoice < 0.70) {
-                                // 30% chance: Stand Still (best time to shoot accurately)
                                 this.aiMoveDirection = 0; 
                             } else if (moveChoice < 0.90) {
-                                // 20% chance: Strafe (move laterally relative to target)
                                 this.aiMoveDirection = directionAwayFromPlayer;
                             } else {
-                                // 10% chance: Retreat (small step back)
                                 this.aiMoveDirection = directionAwayFromPlayer; 
                             }
                         }
 
-                        // --- Strategic Override: Player too far? Decide whether to approach or hold. ---
+                        // --- Strategic Override: Player too far? ---
                         const SHOOTING_RANGE_MAX = 500;
                         const currentDistance = Math.abs(this.x - player.x);
 
                         if (currentDistance > SHOOTING_RANGE_MAX) {
-                            // If the player is far away, decide whether to actively pursue (70% chance) or hold position/wander (30% chance)
                             if (Math.random() < AI_FOLLOW_CHANCE) {
-                                // Active pursuit: Override random movement and force approach
                                 this.aiMoveDirection = defaultFacing ? 1 : -1;
-                            } else {
-                                // Hold/Wander: Stick to the current random move (which might be 0, -1, or 1) 
-                            }
+                            } 
                         }
                         
-                        // Always face the player when attacking.
                         this.facingRight = defaultFacing;
 
-                        
-                        // Shoot at the player
-                        if (now - aiLastShotTime > AI_SHOOT_COOLDOWN) {
-                            this.aiShoot(player);
-                            aiLastShotTime = now;
-                        }
                         break;
 
                     case AI_STATES.FLEE:
-                        // --- Flee Distance Logic ---
                         const distanceToPlayerFlee = Math.abs(this.x - player.x);
                         const directionToRun = this.x > player.x ? 1 : -1; 
                         const isBlocked = (directionToRun === -1 && this.x <= 5) || 
-                                         (directionToRun === 1 && this.x + this.width >= WORLD_WIDTH - 5);
+                                         (directionToRun === 1 && this.x + this.width >= currentLevelConfig.worldWidth - 5);
                         
                         this.aiMoveTimer--;
 
@@ -692,145 +864,125 @@
                             if (isBlocked) {
                                 this.aiMoveDirection = 0;
                             } else if (this.aiMoveTimer <= 0) {
-                                // Slightly longer pause duration when fleeing for added drama
                                 this.aiMoveTimer = Math.floor(Math.random() * 90) + 30; 
                                 
-                                // 85% chance to run, 15% chance to pause/hesitate
                                 if (Math.random() < 0.85) { 
-                                    this.aiMoveDirection = directionToRun; // Run away
+                                    this.aiMoveDirection = directionToRun;
                                 } else {
-                                    this.aiMoveDirection = 0; // Pause/Hesitate
+                                    this.aiMoveDirection = 0;
                                 }
                             }
                         } else {
-                            // Distance achieved, stop running and hold position.
                             this.aiMoveDirection = 0; 
                         }
 
-                        // Override Facing: 
                         const isRunning = this.aiMoveDirection !== 0;
 
                         if (!isRunning) {
-                            // If stationary, face the player (to observe)
                             this.facingRight = defaultFacing;
                         } else {
-                            // If running, face the run direction
                             this.facingRight = directionToRun === 1; 
                         }
                         
-                        // --- Look Back Logic (Glancing) ---
                         if (isRunning) {
                             if (this.lookBackDuration > 0) {
                                 this.lookBackDuration--;
-                                // Override facing to look at the player (opposite of run direction)
                                 this.facingRight = !this.facingRight;
                             } else {
-                                // Check for a new look-back event (less frequent)
-                                if (Math.random() < 0.005) { // 0.5% chance per frame
-                                    this.lookBackDuration = 30; // Look back for 0.5 seconds (30 frames)
+                                if (Math.random() < 0.005) { 
+                                    this.lookBackDuration = 30;
                                 }
                             }
                         } else {
-                            this.lookBackDuration = 0; // Reset if not running
+                            this.lookBackDuration = 0;
                         }
 
-                        // Jump occasionally while fleeing (only jump if moving)
                         if (this.isGrounded && isRunning && Math.random() < 0.05 && now - this.lastJumpTime > 1000) {
                             this.velY = JUMP_VELOCITY * 0.8;
                             this.lastJumpTime = now;
                         }
                         
-                        // STOP SHOOTING - Fleeing
                         break;
                 }
             }
 
             aiShoot(target) {
-                // Calculate the direction vector towards the player's center
                 const angle = Math.atan2(target.y + target.height/2 - (this.y + this.height/2), target.x + target.width/2 - (this.x + this.width/2));
                 
+                // Check if the AI is facing the target before shooting
                 const targetIsRight = target.x > this.x;
-
-                // Only shoot if the AI is facing the target. 
                 if (this.facingRight !== targetIsRight) {
-                    return; // Abort shot.
+                    return;
                 }
 
-                // AI bullets use calculated vector components (velX, velY)
                 const velX = BULLET_SPEED * Math.cos(angle);
                 const velY = BULLET_SPEED * Math.sin(angle);
-                enemyBullets.push(new Bullet(this.x + this.width / 2, this.y + this.height / 2, velX, velY, '#ff0077', true));
-                this.muzzleFlashTimer = 5; // Trigger muzzle flash
+                
+                const bulletColor = this.behavior === AI_BEHAVIORS.VOID ? '#ff0077' : '#ff9900'; // Void uses pink bullets
+                
+                enemyBullets.push(new Bullet(this.x + this.width / 2, this.y + this.height / 2, velX, velY, bulletColor, true));
+                this.muzzleFlashTimer = 5;
             }
 
             updateHUD() {
-                document.getElementById('ai-health').style.width = `${this.health}%`;
-                // Change AI health bar color based on state
                 const healthBar = document.getElementById('ai-health');
                 
-                // Determine color based on state
-                if (this.state === AI_STATES.FLEE) {
-                    healthBar.style.backgroundColor = '#ff4500'; // Orange-red for panic/retreat
-                } else if (this.state === AI_STATES.DODGE) {
-                    healthBar.style.backgroundColor = '#ffff00'; // Yellow for evasion
-                } else if (this.health < FLEE_THRESHOLD && player.health < FLEE_THRESHOLD) {
-                    healthBar.style.backgroundColor = '#ff0000'; // Desperation Red
+                if (this.behavior === AI_BEHAVIORS.ARENA) {
+                    healthBar.style.width = `${this.health}%`;
+                    if (this.state === AI_STATES.FLEE) {
+                        healthBar.style.backgroundColor = '#ff4500';
+                    } else if (this.state === AI_STATES.DODGE) {
+                        healthBar.style.backgroundColor = '#ffff00';
+                    } else if (this.health < FLEE_THRESHOLD && player.health < FLEE_THRESHOLD) {
+                        healthBar.style.backgroundColor = '#ff0000';
+                    } else {
+                        healthBar.style.backgroundColor = '#ff9900';
+                    }
                 } else {
-                    healthBar.style.backgroundColor = '#ff9900'; // Default
+                    // Hide health bar in VOID mode
+                    healthBar.style.width = '100%';
+                    healthBar.style.backgroundColor = 'transparent';
                 }
             }
             
             draw() {
                 const screenX = this.x - cameraX;
-                
-                // Running Bob Calculation
                 let yOffset = 0;
-                // Add a small bounce on knockback
                 if (this.isKnocked) {
                     yOffset = Math.sin(Date.now() / 50) * 3;
                 } else if (this.isGrounded && this.animationTimer > 0) {
-                    // Subtle up/down movement based on sine wave
                     yOffset = Math.sin(this.animationTimer * 0.3) * 1.5; 
                 }
 
-                // Only draw if on screen
                 if (screenX + this.width > 0 && screenX < GAME_WIDTH) {
-                    // Draw Body
                     ctx.fillStyle = this.isKnocked && (Math.floor(Date.now() / 100) % 2 === 0) ? '#ff0000' : this.color;
                     ctx.fillRect(screenX, this.y + yOffset, this.width, this.height);
 
-                    // Draw a single Eye
-                    const eyeColor = '#1a1a2e'; // Dark color for contrast
+                    const eyeColor = '#1a1a2e';
                     const eyeSize = 4;
-                    // Position eye near the top quarter of the body (Adjusted to be higher)
                     const eyeY = this.y + (this.height / 4) - (eyeSize / 2) + yOffset; 
 
                     if (this.facingRight) {
-                        // Eye on the right edge (facing right)
-                        const eyeX = screenX + this.width - eyeSize - 1; // 1 pixel buffer from the edge
+                        const eyeX = screenX + this.width - eyeSize - 1;
                         ctx.fillStyle = eyeColor;
                         ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
                     } else {
-                        // Eye on the left edge (facing left)
-                        const eyeX = screenX + 1; // 1 pixel buffer from the edge
+                        const eyeX = screenX + 1;
                         ctx.fillStyle = eyeColor;
                         ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
                     }
 
-                    // --- Muzzle Flash Effect ---
                     if (this.muzzleFlashTimer > 0) {
                         const flashSize = 8;
-                        const flashColor = 'rgba(255, 100, 255, 0.8)'; // Pink/Purple flash for AI
+                        const flashColor = this.behavior === AI_BEHAVIORS.VOID ? 'rgba(255, 100, 255, 0.8)' : 'rgba(255, 100, 100, 0.8)';
                         let flashX;
                         
-                        // Flash position at the edge of the AI's body
                         if (this.facingRight) {
                             flashX = screenX + this.width;
                         } else {
                             flashX = screenX - flashSize;
                         }
                         
-                        // Draw a small flare at the bullet origin point
                         ctx.fillStyle = flashColor;
                         ctx.fillRect(flashX, this.y + this.height / 2 - flashSize / 2 + yOffset, flashSize, flashSize);
                     }
@@ -844,15 +996,14 @@
                 this.y = y;
                 this.width = 6;
                 this.height = 6;
-                this.velX = velX; // Horizontal speed/component
-                this.velY = velY; // Vertical speed/component
+                this.velX = velX; 
+                this.velY = velY; 
                 this.color = color;
                 this.isEnemy = isEnemy;
                 this.damage = 10;
             }
 
             update() {
-                // Apply constant velocity
                 this.x += this.velX; 
                 this.y += this.velY;
             }
@@ -869,102 +1020,127 @@
         }
 
         // --- Game Initialization ---
+        function startGame(levelConfig) {
+            currentLevelConfig = levelConfig;
+            
+            let startXPlayer;
+            let startXEnemy;
+            let startY;
+            const aiBehavior = levelConfig.id === LEVEL_CONFIGS.VOID.id ? AI_BEHAVIORS.VOID : AI_BEHAVIORS.ARENA;
 
-        function initGame() {
-            player = new Player();
-            enemy = new Enemy();
+            if (levelConfig.id === LEVEL_CONFIGS.VOID.id) {
+                const platformY = GAME_HEIGHT - 100; 
+                const platformWidth = levelConfig.worldWidth / 2;
+                
+                startXPlayer = (levelConfig.worldWidth / 2) - (platformWidth / 4); 
+                startXEnemy = (levelConfig.worldWidth / 2) + (platformWidth / 4); 
+                startY = platformY - 40; 
+            } else {
+                startXPlayer = currentLevelConfig.worldWidth > GAME_WIDTH ? 100 : GAME_WIDTH / 4;
+                startXEnemy = currentLevelConfig.worldWidth - (currentLevelConfig.worldWidth > GAME_WIDTH ? 100 : GAME_WIDTH / 4);
+                startY = GAME_HEIGHT - 30 - 40; 
+            }
+
+            player = new Player(startXPlayer, startY);
+            enemy = new Enemy(startXEnemy, startY, aiBehavior); // Pass the behavior type
+            
             playerBullets = [];
             enemyBullets = [];
             keys = {};
             gameRunning = true;
             cameraX = 0;
-            generatePlatforms();
+            
+            generatePlatforms(levelConfig.worldWidth, levelConfig.floorY);
 
-            document.getElementById('message-box').style.display = 'none';
             player.updateHUD();
             enemy.updateHUD();
+
+            changeScreen(GAME_STATES.GAME);
         }
-        
-        // --- Camera Update ---
+        window.startGame = startGame;
+
         function updateCamera() {
-            // Target the center of the canvas
+            if (!player) return;
             const targetX = player.x - GAME_WIDTH / 2;
             
-            // Smoothly move the camera (lag)
             cameraX += (targetX - cameraX) * CAMERA_LAG;
 
-            // Clamp camera to world boundaries
             if (cameraX < 0) cameraX = 0;
-            if (cameraX + GAME_WIDTH > WORLD_WIDTH) cameraX = WORLD_WIDTH - GAME_WIDTH;
+            if (cameraX + GAME_WIDTH > currentLevelConfig.worldWidth) cameraX = currentLevelConfig.worldWidth - GAME_WIDTH;
         }
 
-        // --- Input Handling ---
-
+        // --- Input Handling (Unchanged) ---
         window.addEventListener('keydown', (e) => {
+            if (currentGameState !== GAME_STATES.GAME) return;
             keys[e.key] = true;
             if (e.key === 'Shift') {
                 player.shoot();
             }
-            // Prevent common scrolling/default actions
             if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'w', 'a', 's', 'd'].includes(e.key)) {
                  e.preventDefault(); 
             }
         });
 
         window.addEventListener('keyup', (e) => {
+            if (currentGameState !== GAME_STATES.GAME) return;
             keys[e.key] = false;
         });
 
-        // --- Game Loop ---
+        // --- Game Loop (Unchanged) ---
 
         function update() {
-            if (!gameRunning) return;
+            if (!gameRunning || currentGameState !== GAME_STATES.GAME) return;
 
-            // 1. Update Entities (in world coordinates)
+            const now = Date.now();
+
+            // 1. Update Entities
             player.update();
             enemy.update();
 
-            // 2. Resolve Player-Enemy Collision (Pushback/Bounce)
-            // NOTE: This uses the stronger KNOCKBACK_FORCE for melee contact.
+            // 2. Resolve Player-Enemy Collision (Pushback/Bounce & AI Dodge Jump)
             if (checkCollision(player, enemy)) {
                 const overlapX = Math.min(player.x + player.width, enemy.x + enemy.width) - Math.max(player.x, enemy.x);
                 const overlapY = Math.min(player.y + player.height, enemy.y + enemy.height) - Math.max(player.y, enemy.y);
                 
-                // Only resolve if vertical overlap is large (meaning they are horizontally pushing)
                 if (overlapX > 0 && overlapY > 0 && overlapY > player.height / 2) {
-                    const pushbackAmount = overlapX / 2 + 0.5; // Ensure separation
+                    
+                    // AI Bump Dodge Jump 
+                    if (enemy.isGrounded && now - enemy.lastJumpTime > 300) { 
+                        enemy.velY = OVERJUMP_VELOCITY; 
+                        enemy.lastJumpTime = now;
+                        enemy.aiMoveDirection = 0; // Stop horizontal movement during jump
+                    }
+                    
+                    const pushbackAmount = overlapX / 2 + 0.5;
                     
                     if (player.x < enemy.x) {
-                        // Player is left of enemy, push player left and enemy right
                         player.x -= pushbackAmount;
                         enemy.x += pushbackAmount;
                         
-                        // Apply temporary horizontal velocity (bounce/knockback)
                         player.velX = -KNOCKBACK_FORCE;
                         enemy.velX = KNOCKBACK_FORCE;
                     } else {
-                        // Player is right of enemy, push player right and enemy left
                         player.x += pushbackAmount;
                         enemy.x -= pushbackAmount;
 
-                        // Apply temporary horizontal velocity (bounce/knockback)
                         player.velX = KNOCKBACK_FORCE;
                         enemy.velX = -KNOCKBACK_FORCE;
                     }
                 }
             }
 
-
-            // 3. Update Bullets (in world coordinates)
+            // 3. Update Bullets
             playerBullets.forEach(bullet => bullet.update());
             enemyBullets.forEach(bullet => bullet.update());
             
-            // 4. Update Camera based on player position
+            // 4. Update Camera
             updateCamera();
 
             // 5. Collision Detection & Filtering
             let remainingPlayerBullets = [];
             let remainingEnemyBullets = [];
+            let playerHit = false;
+            let enemyHit = false;
             
             // Step 5a: Player Bullet vs Enemy & Bullet vs Bullet
             playerBullets.forEach(pBullet => {
@@ -972,18 +1148,17 @@
                 
                 // 1. Check against Enemy
                 if (checkCollision(pBullet, enemy)) {
-                    // Apply lighter knockback to the enemy from the player's bullet
                     const knockDirection = pBullet.x < enemy.x ? 1 : -1;
                     enemy.velX = BULLET_ENTITY_KNOCKBACK_FORCE * knockDirection;
                     
                     enemy.takeDamage(pBullet.damage);
                     hitTarget = true;
+                    enemyHit = true;
                 }
                 
-                // 2. Check against Enemy Bullets (Bullet vs Bullet Collision)
+                // 2. Check against Enemy Bullets (Clash)
                 enemyBullets = enemyBullets.filter(eBullet => {
                     if (checkCollision(pBullet, eBullet)) {
-                        // --- BULLET KNOCKBACK/CLASH LOGIC ---
                         const dx = eBullet.x - pBullet.x;
                         const dy = eBullet.y - pBullet.y;
                         const angle = Math.atan2(dy, dx);
@@ -995,16 +1170,15 @@
                         pBullet.velY -= impulseY;
                         eBullet.velX += impulseX;
                         eBullet.velY += impulseY;
-                        // --- END BULLET CLASH LOGIC ---
-
-                        hitTarget = true; // Player bullet is destroyed
-                        return false; // Remove enemy bullet
+                        
+                        hitTarget = false; 
+                        return true;
                     }
-                    return true; // Keep enemy bullet
+                    return true;
                 });
 
-                // Keep player bullet if it didn't hit anything and is in bounds
-                if (!hitTarget && pBullet.x > -10 && pBullet.x < WORLD_WIDTH + 10 && pBullet.y > -10 && pBullet.y < GAME_HEIGHT + 10) {
+                // Keep player bullet if it didn't hit an entity and is in bounds
+                if (!hitTarget && pBullet.x > -10 && pBullet.x < currentLevelConfig.worldWidth + 10 && pBullet.y > -10 && pBullet.y < GAME_HEIGHT + 10) {
                     remainingPlayerBullets.push(pBullet);
                 }
             });
@@ -1014,27 +1188,47 @@
             // Step 5b: Check remaining Enemy Bullets vs Player
             enemyBullets.forEach(eBullet => {
                 if (checkCollision(eBullet, player)) {
-                    // Apply Lighter knockback to player when hit by an enemy bullet
                     const knockDirection = eBullet.x < player.x ? 1 : -1;
-                    player.velX = BULLET_ENTITY_KNOCKBACK_FORCE * knockDirection; // <-- Uses the new, lower force
+                    player.velX = BULLET_ENTITY_KNOCKBACK_FORCE * knockDirection; 
                     
                     player.takeDamage(eBullet.damage);
-                } else if (eBullet.x > -10 && eBullet.x < WORLD_WIDTH + 10 && eBullet.y > -10 && eBullet.y < GAME_HEIGHT + 10) {
+                    playerHit = true;
+                } else if (eBullet.x > -10 && eBullet.x < currentLevelConfig.worldWidth + 10 && eBullet.y > -10 && eBullet.y < GAME_HEIGHT + 10) {
                     remainingEnemyBullets.push(eBullet);
                 }
             });
 
-            enemyBullets = remainingEnemyBullets;
+            // Filter out bullets that hit the player
+            enemyBullets = remainingEnemyBullets.filter(b => !playerHit || !checkCollision(b, player));
             
             // 6. Update Grass Animation
             grassOffset = (grassOffset + 0.5) % 800;
 
 
-            // 7. Check Game Over Conditions
-            if (player.health <= 0) {
-                showMessage("DEFEAT! The AI proved too clever.");
-            } else if (enemy.health <= 0) {
-                showMessage("VICTORY! The AI has been defeated.");
+            // 7. Check Game Over Conditions and Void Knockout
+            
+            // Health Depletion Check (Applies only to ARENA mode)
+            if (enemy.behavior === AI_BEHAVIORS.ARENA) {
+                if (player.health <= 0) {
+                    showMessage("DEFEAT! The AI proved too clever.", false);
+                    return;
+                } else if (enemy.health <= 0) {
+                    showMessage("VICTORY! The AI has been defeated.", true);
+                    return;
+                }
+            }
+            
+            // Knockout Check (Specific to levels with knockoutY defined)
+            const knockoutY = currentLevelConfig.knockoutY;
+            if (knockoutY !== null) {
+                if (player.y > knockoutY) {
+                    showMessage("KNOCKOUT DEFEAT! You fell into the abyss.", false);
+                    return;
+                }
+                if (enemy.y > knockoutY) {
+                    showMessage("KNOCKOUT VICTORY! The AI was pushed into the void.", true);
+                    return;
+                }
             }
         }
         
@@ -1043,79 +1237,84 @@
             const worldX = cameraX + screenX;
             ctx.fillStyle = color;
             
-            // Base grass sway (subtle wave)
             let sway = Math.sin((worldX / 10 + grassOffset) * 0.05) * 1.5;
             
-            // --- Grass Interaction Effect ---
-            const entities = [player, enemy];
+            const entities = [player, enemy].filter(e => e); 
             
             for (const entity of entities) {
-                // Calculate horizontal distance to the center of the entity
                 const entityCenterX = entity.x + entity.width / 2;
                 const grassDistX = Math.abs(worldX - entityCenterX);
 
-                // If entity is close (within 20 pixels) and moving on the ground
                 if (grassDistX < 20 && entity.isGrounded && entity.animationTimer > 0) {
-                    // Calculate push factor (1.0 close, 0.0 far)
                     const pushFactor = 1 - (grassDistX / 20); 
-                    
-                    // Determine the direction to push the grass (away from the entity's center)
                     const pushDirection = worldX < entityCenterX ? -1 : 1; 
                     
-                    // Apply a strong push effect and slight squash
-                    sway += pushDirection * pushFactor * 4; // Side sway
-                    height = Math.max(1, height - (pushFactor * 3)); // Squash height
+                    sway += pushDirection * pushFactor * 4; 
+                    height = Math.max(1, height - (pushFactor * 3));
                 }
             }
-            // ---------------------------------
             
-            // Draw a slightly swaying, vertical blade
-            ctx.fillRect(screenX + sway, FLOOR_Y - height, 2, height);
+            // In void mode, skip drawing grass if floor is too low
+            if (currentLevelConfig.id === LEVEL_CONFIGS.VOID.id) return;
+
+            ctx.fillRect(screenX + sway, currentLevelConfig.floorY - height, 2, height);
         }
 
 
         function draw() {
-            // Clear canvas - background color is set via CSS style
-            ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+            if (currentGameState !== GAME_STATES.GAME || !player) {
+                ctx.fillStyle = currentLevelConfig ? currentLevelConfig.background : '#243b55';
+                ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+                return;
+            }
 
-            // Draw the floor/ground (Green element)
-            ctx.fillStyle = '#1e8449'; // Dark green for the floor
-            ctx.fillRect(0, FLOOR_Y, GAME_WIDTH, GAME_HEIGHT - FLOOR_Y);
+            ctx.fillStyle = currentLevelConfig.background;
+            ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+            const isVoid = currentLevelConfig.id === LEVEL_CONFIGS.VOID.id;
+
+            // Draw the floor/ground (Only for Arena, Void floor is too low to be drawn)
+            if (!isVoid) {
+                ctx.fillStyle = '#1e8449'; 
+                ctx.fillRect(0, currentLevelConfig.floorY, GAME_WIDTH, GAME_HEIGHT - currentLevelConfig.floorY);
+            }
             
             // --- Draw Platforms (Trees/Pillars) ---
             platforms.forEach(p => {
                 const screenX = p.x - cameraX;
-                // Only draw if on screen
                 if (screenX + p.width > 0 && screenX < GAME_WIDTH) {
                     ctx.fillStyle = p.color;
                     ctx.fillRect(screenX, p.y, p.width, p.height);
                 }
             });
             
-            // --- Draw Grass Animation (Optimized: Drawing fewer blades) ---
-            for (let i = 0; i < GAME_WIDTH + 10; i += 10) { 
-                const worldX = cameraX + i;
-                const color = worldX % 20 < 10 ? '#38761d' : '#274e13'; // Different shades of green
-                drawGrass(i, 8 + Math.sin(worldX / 150) * 4, color); 
+            // --- Draw Grass Animation (Only for Arena) ---
+            if (!isVoid) {
+                for (let i = 0; i < GAME_WIDTH + 10; i += 10) { 
+                    const worldX = cameraX + i;
+                    const color = worldX % 20 < 10 ? '#38761d' : '#274e13'; 
+                    drawGrass(i, 8 + Math.sin(worldX / 150) * 4, color); 
+                }
             }
 
-            // Draw entities (Player, Enemy) - use their draw methods which account for cameraX
+            // Draw entities
             player.draw();
             enemy.draw();
 
-            // Draw bullets - use their draw methods which account for cameraX
+            // Draw bullets
             playerBullets.forEach(bullet => bullet.draw());
             enemyBullets.forEach(bullet => bullet.draw());
         }
 
         function gameLoop() {
-            update();
+            if (currentGameState === GAME_STATES.GAME) {
+                update();
+            }
             draw();
             requestAnimationFrame(gameLoop);
         }
 
-        // Start the game when the script loads
-        initGame();
+        changeScreen(GAME_STATES.MENU);
         gameLoop();
     });
 </script>
