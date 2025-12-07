@@ -139,7 +139,12 @@
         const FLEE_THRESHOLD = 30; // AI flees when health drops below this
         const DODGE_DISTANCE = 80; // Distance to detect an incoming bullet
         const CAMERA_LAG = 0.05; // How smoothly the camera follows the player
-        const KNOCKBACK_FORCE = 5; // Force for player/enemy pushback
+        
+        // --- KNOCKBACK CONSTANTS ---
+        const KNOCKBACK_FORCE = 5; // Force for player/enemy pushback (Melee)
+        const BULLET_ENTITY_KNOCKBACK_FORCE = 2.5; // NEW: Force for bullet hitting player/enemy
+        const BULLET_KNOCKBACK_FORCE = 1.2; // Force bullets push each other back (Clash)
+        
         const BLOCKAGE_DISTANCE = 40; // Distance for AI to detect player blocking path
         const OVERJUMP_VELOCITY = -14; // Higher jump for clearing the player
 
@@ -295,7 +300,7 @@
                 
                 // Decay horizontal velocity for a "bouncing" effect
                 this.velX *= 0.9;
-                if (Math.abs(this.velX) < 0.1) this.velX = 0;
+                if (Math.abs(this.velX) < 0.01) this.velX = 0; // Even smaller threshold for final stop
 
                 // Apply vertical movement and gravity
                 if (!this.isGrounded) {
@@ -326,37 +331,44 @@
                 super(50, FLOOR_Y - 40, 20, 40, '#00ffff', MAX_HEALTH);
                 this.isShooting = false;
                 this.facingRight = true;
-                this.isKnocked = false; // Flag to stop player input during knockback
+                // isKnocked is now purely for visual effects, not blocking input
+                this.isKnocked = false; 
             }
 
             update() {
                 const oldX = this.x; 
                 let moveX = 0;
                 
-                // Only allow input if not under knockback
-                if (!this.isKnocked) {
-                    // Use else if to ensure movement is strictly one direction
-                    if (keys['ArrowLeft'] || keys['a']) {
-                        moveX = -PLAYER_SPEED;
-                        this.facingRight = false;
-                    } else if (keys['ArrowRight'] || keys['d']) {
-                        moveX = PLAYER_SPEED;
-                        this.facingRight = true;
-                    }
-                    
-                    this.x += moveX;
-                    
-                    // Apply jump
-                    if ((keys['ArrowUp'] || keys['w'] || keys[' ']) && this.isGrounded) {
-                        this.velY = JUMP_VELOCITY;
-                        this.isGrounded = false;
-                    }
+                // --- 1. Read User Input (Always allowed) ---
+                if (keys['ArrowLeft'] || keys['a']) {
+                    moveX = -PLAYER_SPEED;
+                    this.facingRight = false;
+                } else if (keys['ArrowRight'] || keys['d']) {
+                    moveX = PLAYER_SPEED;
+                    this.facingRight = true;
                 }
                 
+                // --- 2. Input Override Fix (Regain Control) ---
+                // If the player is applying intentional movement, and the knockback is weak, clear velX instantly.
+                // This prevents the "stuck/sliding" feeling.
+                if (moveX !== 0 && Math.abs(this.velX) < 1.0) { 
+                    this.velX = 0;
+                }
+
+                // 3. Apply Player Movement
+                this.x += moveX;
+                
+                // 4. Apply Jump
+                if ((keys['ArrowUp'] || keys['w'] || keys[' ']) && this.isGrounded) {
+                    this.velY = JUMP_VELOCITY;
+                    this.isGrounded = false;
+                }
+                
+                // 5. Apply Gravity and Knockback Decay (via applyGravity)
                 this.applyGravity();
                 
-                // If horizontal velocity is decaying, temporarily disable input
-                this.isKnocked = Math.abs(this.velX) > 0.1;
+                // 6. Update Visual Knockback Flag (Only visual effect threshold)
+                this.isKnocked = Math.abs(this.velX) > 1.5;
 
                 // Muzzle flash timer update
                 this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - 1);
@@ -388,7 +400,8 @@
                     // Start bullet from the edge of the player
                     const bulletX = this.x + (this.width / 2) + (direction * (this.width / 2)); 
                     const bulletY = this.y + (this.height / 2);
-                    playerBullets.push(new Bullet(bulletX, bulletY, direction, 0, '#ffffff', false));
+                    // Player bullets have a simple direction-based velocity
+                    playerBullets.push(new Bullet(bulletX, bulletY, direction * BULLET_SPEED, 0, '#ffffff', false));
                     lastBulletTime = now;
                     this.muzzleFlashTimer = 5; // Trigger muzzle flash
                 }
@@ -482,7 +495,7 @@
             update() {
                 const oldX = this.x; // Capture old position for animation check
 
-                // Only update AI movement if not currently knocked back
+                // Only update AI movement if not currently knocked back (AI uses a strict cutoff)
                 if (Math.abs(this.velX) < 0.1) {
                     this.updateAI();
                     this.isKnocked = false;
@@ -573,8 +586,8 @@
                 const incomingBullet = playerBullets.find(bullet => {
                     const distance = dist(bullet.x, bullet.y, this.x, this.y);
                     // Simple prediction based on horizontal path
-                    const timeToReachX = Math.abs((this.x - bullet.x) / (bullet.velX * BULLET_SPEED));
-                    const predictedY = bullet.y + bullet.velY * timeToReachX;
+                    // Note: Player bullets travel purely horizontal (velY=0), so prediction is simpler
+                    const predictedY = bullet.y; 
 
                     // Check if bullet is approaching and likely to hit the vertical space
                     return distance < DODGE_DISTANCE && 
@@ -743,6 +756,7 @@
                     return; // Abort shot.
                 }
 
+                // AI bullets use calculated vector components (velX, velY)
                 const velX = BULLET_SPEED * Math.cos(angle);
                 const velY = BULLET_SPEED * Math.sin(angle);
                 enemyBullets.push(new Bullet(this.x + this.width / 2, this.y + this.height / 2, velX, velY, '#ff0077', true));
@@ -830,8 +844,8 @@
                 this.y = y;
                 this.width = 6;
                 this.height = 6;
-                this.velX = velX;
-                this.velY = velY; 
+                this.velX = velX; // Horizontal speed/component
+                this.velY = velY; // Vertical speed/component
                 this.color = color;
                 this.isEnemy = isEnemy;
                 this.damage = 10;
@@ -839,14 +853,8 @@
 
             update() {
                 // Apply constant velocity
-                if (!this.isEnemy) {
-                    // Note: Player bullets travel horizontally based on a direction (1 or -1) * constant speed
-                    this.x += this.velX * BULLET_SPEED; 
-                } else {
-                    // Enemy bullets travel based on pre-calculated vector components (velX, velY)
-                    this.x += this.velX; 
-                    this.y += this.velY;
-                }
+                this.x += this.velX; 
+                this.y += this.velY;
             }
 
             draw() {
@@ -917,7 +925,7 @@
             enemy.update();
 
             // 2. Resolve Player-Enemy Collision (Pushback/Bounce)
-            // NOTE: The AI's jump-over logic should prevent this from triggering frequently.
+            // NOTE: This uses the stronger KNOCKBACK_FORCE for melee contact.
             if (checkCollision(player, enemy)) {
                 const overlapX = Math.min(player.x + player.width, enemy.x + enemy.width) - Math.max(player.x, enemy.x);
                 const overlapY = Math.min(player.y + player.height, enemy.y + enemy.height) - Math.max(player.y, enemy.y);
@@ -964,6 +972,10 @@
                 
                 // 1. Check against Enemy
                 if (checkCollision(pBullet, enemy)) {
+                    // Apply lighter knockback to the enemy from the player's bullet
+                    const knockDirection = pBullet.x < enemy.x ? 1 : -1;
+                    enemy.velX = BULLET_ENTITY_KNOCKBACK_FORCE * knockDirection;
+                    
                     enemy.takeDamage(pBullet.damage);
                     hitTarget = true;
                 }
@@ -971,7 +983,21 @@
                 // 2. Check against Enemy Bullets (Bullet vs Bullet Collision)
                 enemyBullets = enemyBullets.filter(eBullet => {
                     if (checkCollision(pBullet, eBullet)) {
-                        hitTarget = true; // Player bullet is destroyed too
+                        // --- BULLET KNOCKBACK/CLASH LOGIC ---
+                        const dx = eBullet.x - pBullet.x;
+                        const dy = eBullet.y - pBullet.y;
+                        const angle = Math.atan2(dy, dx);
+
+                        const impulseX = BULLET_KNOCKBACK_FORCE * Math.cos(angle);
+                        const impulseY = BULLET_KNOCKBACK_FORCE * Math.sin(angle);
+                        
+                        pBullet.velX -= impulseX; 
+                        pBullet.velY -= impulseY;
+                        eBullet.velX += impulseX;
+                        eBullet.velY += impulseY;
+                        // --- END BULLET CLASH LOGIC ---
+
+                        hitTarget = true; // Player bullet is destroyed
                         return false; // Remove enemy bullet
                     }
                     return true; // Keep enemy bullet
@@ -988,6 +1014,10 @@
             // Step 5b: Check remaining Enemy Bullets vs Player
             enemyBullets.forEach(eBullet => {
                 if (checkCollision(eBullet, player)) {
+                    // Apply Lighter knockback to player when hit by an enemy bullet
+                    const knockDirection = eBullet.x < player.x ? 1 : -1;
+                    player.velX = BULLET_ENTITY_KNOCKBACK_FORCE * knockDirection; // <-- Uses the new, lower force
+                    
                     player.takeDamage(eBullet.damage);
                 } else if (eBullet.x > -10 && eBullet.x < WORLD_WIDTH + 10 && eBullet.y > -10 && eBullet.y < GAME_HEIGHT + 10) {
                     remainingEnemyBullets.push(eBullet);
